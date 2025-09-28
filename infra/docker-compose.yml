@@ -1,0 +1,65 @@
+networks:
+  default:
+    name: aurora_net
+
+volumes:
+  pgdata:
+  web_dist:
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: aurora
+      POSTGRES_PASSWORD: aurorapass
+      POSTGRES_DB: auroradb
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  api-service:
+    build: ../services/api
+    environment:
+      DATABASE_URL: postgresql://aurora:aurorapass@postgres:5432/auroradb?schema=public
+      JWT_SECRET: aurora-secret
+      PORT: 4000
+    depends_on:
+      postgres:
+        condition: service_healthy
+    expose:
+      - "4000"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4000/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+    restart: unless-stopped
+
+  # Builder opcional do front (será usado no Passo 4)
+  web:
+    image: node:20-alpine
+    working_dir: /app
+    volumes:
+      - ../apps/web:/app
+      - web_dist:/webdist
+    command: sh -lc "npm ci && npm run build"
+
+  nginx:
+    image: nginx:1.27-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api-service:
+        condition: service_healthy
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - web_dist:/usr/share/nginx/html:ro
+    restart: unless-stopped
